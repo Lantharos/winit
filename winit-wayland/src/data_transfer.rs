@@ -1060,18 +1060,13 @@ impl WinitState {
         const NO_POINTER_CAP: &str =
             "Tried to initiate drag, but source window does not have the pointer capability";
 
-        let seat = window
-            .focused_seats()
-            // HACK: How do we get the correct seat for pointers here?
-            .find_map(|seat| self.seats.get(seat).filter(|seat| seat.data_device().is_some()))
+        let (data_device, pointer) = self
+            .seats
+            .values()
+            .filter_map(|seat| Some((seat.data_device()?, seat.pointer_data()?)))
+            .max_by_key(|(_, pointer)| pointer.data().focused_window() == Some(source))
             .ok_or(NotSupportedError::new(NO_POINTER_CAP))?;
-        let data_device = seat.data_device().ok_or(NotSupportedError::new(NO_POINTER_CAP))?;
-
-        let serial = seat
-            .pointer_data()
-            .ok_or(NotSupportedError::new(NO_POINTER_CAP))?
-            .latest_button_serial()
-            .unwrap_or_default();
+        let serial = pointer.latest_button_serial().unwrap_or_default();
 
         data_source.start_drag(
             data_device,
