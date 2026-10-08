@@ -966,21 +966,13 @@ impl RootActiveEventLoop for ActiveEventLoop {
             let source_window_state = source_window_mutex.lock().unwrap();
             let source_surface = source_window_state.window.wl_surface();
 
-            let seat = source_window_state
-                .focused_seats()
-                .find_map(|seat_id| {
-                    // HACK: How do we get the correct seat for pointers here?
-                    state.seats.get(seat_id).filter(|seat| seat.data_device().is_some())
-                })
+            let (data_device, pointer) = state
+                .seats
+                .values()
+                .filter_map(|seat| Some((seat.data_device()?, seat.pointer_data()?)))
+                .max_by_key(|(_, pointer)| pointer.data().focused_window() == Some(source))
                 .ok_or(NotSupportedError::new(NO_POINTER_CAP_ERROR_MSG))?;
-            let data_device =
-                seat.data_device().ok_or(NotSupportedError::new(NO_POINTER_CAP_ERROR_MSG))?;
-
-            let serial = seat
-                .pointer_data()
-                .ok_or(NotSupportedError::new(NO_POINTER_CAP_ERROR_MSG))?
-                .latest_button_serial()
-                .unwrap_or_default();
+            let serial = pointer.latest_button_serial().unwrap_or_default();
 
             data_source.start_drag(data_device, source_surface, icon_surface.as_ref(), serial);
 

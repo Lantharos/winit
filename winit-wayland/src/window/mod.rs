@@ -17,8 +17,8 @@ use winit_core::error::{CreateWindowError, NotSupportedError, RequestError};
 use winit_core::event_loop::AsyncRequestSerial;
 use winit_core::monitor::{Fullscreen, MonitorHandle as CoreMonitorHandle};
 use winit_core::window::{
-    CursorGrabMode, ImeCapabilities, ImeRequest, ImeRequestError, ResizeDirection, Theme,
-    UserAttentionType, Window as CoreWindow, WindowAttributes, WindowButtons, WindowId,
+    ActivationToken, CursorGrabMode, ImeCapabilities, ImeRequest, ImeRequestError, ResizeDirection,
+    Theme, UserAttentionType, Window as CoreWindow, WindowAttributes, WindowButtons, WindowId,
     WindowLevel,
 };
 
@@ -247,6 +247,17 @@ impl Window {
         xdg_activation_token.commit();
 
         Ok(serial)
+    }
+
+    pub fn activate(&self, token: ActivationToken) -> Result<(), RequestError> {
+        let xdg_activation = self
+            .common
+            .handles
+            .xdg_activation
+            .as_ref()
+            .ok_or_else(|| NotSupportedError::new("xdg_activation_v1 is not available"))?;
+        xdg_activation.activate(token.into_raw(), self.surface());
+        Ok(())
     }
 
     #[inline]

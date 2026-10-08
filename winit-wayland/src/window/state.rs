@@ -260,12 +260,6 @@ impl WindowState {
         self.window.xdg_toplevel()
     }
 
-    // HACK: Currently to get the data device to initiate a drag-and-drop, we iterate through all
-    // focused seats to find one with a pointer capability. This is definitely wrong.
-    pub(crate) fn focused_seats(&self) -> impl Iterator<Item = &ObjectId> {
-        self.seat_focus.iter()
-    }
-
     /// Apply closure on the given pointer.
     fn apply_on_pointer<
         F: FnMut(&ThemedPointer<WinitPointerData>, &PointerData<WinitPointerData>),
