@@ -557,6 +557,14 @@ impl WindowState {
             .unwrap_or_default()
     }
 
+    pub(crate) fn is_tiled(&self) -> bool {
+        let last_configure = match &self.window {
+            WindowType::Window { last_configure, .. } => last_configure,
+            WindowType::Popup { .. } => return false,
+        };
+        last_configure.as_ref().is_some_and(|last_configure| last_configure.is_tiled())
+    }
+
     /// Get the scale factor of the window.
     #[inline]
     pub fn scale_factor(&self) -> f64 {

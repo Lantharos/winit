@@ -260,6 +260,10 @@ impl Window {
         Ok(())
     }
 
+    pub fn is_tiled(&self) -> bool {
+        self.common.is_tiled()
+    }
+
     #[inline]
     pub fn surface(&self) -> &WlSurface {
         self.window.wl_surface()
