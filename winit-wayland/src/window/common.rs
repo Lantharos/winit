@@ -267,6 +267,11 @@ impl WindowCommon {
     }
 
     /// Only meaningful for a top-level surface.
+    pub(super) fn is_tiled(&self) -> bool {
+        self.state.lock().unwrap().is_tiled()
+    }
+
+    /// Only meaningful for a top-level surface.
     pub(super) fn fullscreen(&self) -> Option<Fullscreen> {
         self.state.lock().unwrap().fullscreen()
     }

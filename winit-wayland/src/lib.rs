@@ -94,6 +94,10 @@ pub trait WindowExtWayland {
     /// Activates the window with an activation token from another client, such as a
     /// notification server or a launcher.
     fn activate(&self, token: ActivationToken) -> Result<(), RequestError>;
+
+    /// Whether the compositor tiled the window against any of its edges, as told by the
+    /// `xdg_toplevel` tiled states.
+    fn is_tiled(&self) -> bool;
 }
 
 impl WindowExtWayland for dyn CoreWindow + '_ {
@@ -106,6 +110,10 @@ impl WindowExtWayland for dyn CoreWindow + '_ {
         self.cast_ref::<Window>()
             .ok_or_else(|| NotSupportedError::new("not a Wayland window"))?
             .activate(token)
+    }
+
+    fn is_tiled(&self) -> bool {
+        self.cast_ref::<Window>().is_some_and(Window::is_tiled)
     }
 }
 
