@@ -44,6 +44,10 @@ changelog entry.
 
 ## Unreleased
 
+### Added
+
+- On Wayland, add `EventLoopBuilderExtWayland::with_reconnect`, which connects to the compositor again after losing the connection, such as when it crashed and a new instance took over its socket. Applications drop their windows in `destroy_surfaces` and create them again in `can_create_surfaces`.
+
 ### Changed
 
 - On Wayland, a window created with a parent window now calls `xdg_toplevel.set_parent` with that

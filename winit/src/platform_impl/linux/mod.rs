@@ -33,6 +33,7 @@ pub(crate) enum Backend {
 pub(crate) struct PlatformSpecificEventLoopAttributes {
     pub(crate) forced_backend: Option<Backend>,
     pub(crate) any_thread: bool,
+    pub(crate) reconnect: bool,
 }
 
 /// `x11_or_wayland!(match expr; Enum(foo) => foo.something())`
@@ -124,15 +125,15 @@ impl EventLoop {
         // Create the display based on the backend.
         match backend {
             #[cfg(wayland_platform)]
-            Backend::Wayland => EventLoop::new_wayland_any_thread(),
+            Backend::Wayland => EventLoop::new_wayland_any_thread(attributes.reconnect),
             #[cfg(x11_platform)]
             Backend::X => EventLoop::new_x11_any_thread(),
         }
     }
 
     #[cfg(wayland_platform)]
-    fn new_wayland_any_thread() -> Result<EventLoop, EventLoopError> {
-        wayland::EventLoop::new().map(|evlp| EventLoop::Wayland(Box::new(evlp)))
+    fn new_wayland_any_thread(reconnect: bool) -> Result<EventLoop, EventLoopError> {
+        wayland::EventLoop::new(reconnect).map(|evlp| EventLoop::Wayland(Box::new(evlp)))
     }
 
     #[cfg(x11_platform)]
