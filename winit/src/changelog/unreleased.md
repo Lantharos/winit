@@ -40,6 +40,10 @@ changelog entry.
 
 ## Unreleased
 
+### Added
+
+- On Wayland, add `EventLoopBuilderExtWayland::with_reconnect`, which connects to the compositor again after losing the connection, such as when it crashed and a new instance took over its socket. Applications drop their windows in `destroy_surfaces` and create them again in `can_create_surfaces`.
+
 ### Fixed
 
 - On Windows, fix a crash occurring when trying to create a DXGI surface on a window that is both fullscreen and always on top.

@@ -11,8 +11,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use calloop::PostAction;
 use calloop::ping::Ping;
+use calloop::{LoopHandle, PostAction, RegistrationToken};
 use dpi::LogicalSize;
 use rustix::event::{PollFd, PollFlags};
 use rustix::pipe::{self, PipeFlags};
@@ -78,6 +78,12 @@ pub struct EventLoop {
     /// when creating a new window.
     wayland_dispatcher: WaylandDispatcher,
 
+    /// Registration of the Wayland dispatcher in calloop's event loop.
+    wayland_token: RegistrationToken,
+
+    /// Whether to connect to the compositor again when the connection is lost.
+    reconnect: bool,
+
     /// Connection to the wayland server.
     handle: Arc<OwnedDisplayHandle>,
 
@@ -92,7 +98,7 @@ pub struct EventLoop {
 }
 
 impl EventLoop {
-    pub fn new() -> Result<EventLoop, EventLoopError> {
+    pub fn new(reconnect: bool) -> Result<EventLoop, EventLoopError> {
         static EVENT_LOOP_CREATED: AtomicBool = AtomicBool::new(false);
         if EVENT_LOOP_CREATED.swap(true, Ordering::Relaxed) {
             // For better cross-platformness.
@@ -101,37 +107,10 @@ impl EventLoop {
 
         let connection = Connection::connect_to_env().map_err(|err| os_error!(err))?;
 
-        let (globals, mut event_queue) =
-            globals::registry_queue_init(&connection).map_err(|err| os_error!(err))?;
-        let queue_handle = event_queue.handle();
-
         let event_loop =
             calloop::EventLoop::<WinitState>::try_new().map_err(|err| os_error!(err))?;
 
-        let mut winit_state = WinitState::new(&globals, &queue_handle, event_loop.handle())?;
-
-        // NOTE: do a roundtrip after binding the globals to prevent potential
-        // races with the server.
-        event_queue.roundtrip(&mut winit_state).map_err(|err| os_error!(err))?;
-
-        // Register Wayland source.
-        let wayland_source = WaylandSource::new(connection.clone(), event_queue);
-        let wayland_dispatcher =
-            calloop::Dispatcher::new(wayland_source, |_, queue, winit_state: &mut WinitState| {
-                let result = queue.dispatch_pending(winit_state);
-                if result.is_ok()
-                    && (!winit_state.events_sink.is_empty()
-                        || !winit_state.window_compositor_updates.is_empty())
-                {
-                    winit_state.dispatched_events = true;
-                }
-                result
-            });
-
-        event_loop
-            .handle()
-            .register_dispatcher(wayland_dispatcher.clone())
-            .map_err(|err| os_error!(err))?;
+        let wayland = WaylandConnection::new(connection, event_loop.handle())?;
 
         // Setup the user proxy.
         let (ping, ping_source) = calloop::ping::make_ping().unwrap();
@@ -155,16 +134,15 @@ impl EventLoop {
             })
             .map_err(|err| os_error!(err))?;
 
-        let handle = Arc::new(OwnedDisplayHandle::new(connection));
         let active_event_loop = ActiveEventLoop {
-            handle: handle.clone(),
-            wayland_dispatcher: wayland_dispatcher.clone(),
+            handle: wayland.handle.clone(),
+            wayland_dispatcher: wayland.dispatcher.clone(),
             event_loop_awakener,
             event_loop_proxy: EventLoopProxy::new(ping).into(),
-            queue_handle,
+            queue_handle: wayland.queue_handle,
             control_flow: Cell::new(ControlFlow::default()),
             exit: Cell::new(None),
-            state: RefCell::new(winit_state),
+            state: RefCell::new(wayland.state),
         };
 
         let event_loop = Self {
@@ -172,8 +150,10 @@ impl EventLoop {
             compositor_updates: Vec::new(),
             buffer_sink: EventSink::default(),
             window_ids: Vec::new(),
-            handle,
-            wayland_dispatcher,
+            handle: wayland.handle,
+            wayland_dispatcher: wayland.dispatcher,
+            wayland_token: wayland.token,
+            reconnect,
             event_loop,
             active_event_loop,
             pump_event_notifier: None,
@@ -278,11 +258,17 @@ impl EventLoop {
             // Checking for flush error is essential to perform an exit with error, since
             // once we have a protocol error, we could get stuck retrying...
             if self.handle.connection.flush().is_err() {
+                if self.reconnect_after_loss(app) {
+                    continue;
+                }
                 self.set_exit_code(1);
                 return;
             }
 
             if let Err(error) = self.loop_dispatch(timeout) {
+                if self.reconnect_after_loss(app) {
+                    continue;
+                }
                 // NOTE We exit on errors from dispatches, since if we've got protocol error
                 // libwayland-client/wayland-rs will inform us anyway, but crashing downstream is
                 // not really an option. Instead we inform that the event loop got
@@ -322,6 +308,39 @@ impl EventLoop {
         };
 
         self.single_iteration(app, cause);
+    }
+
+    /// Connects to the compositor again after the connection to it was lost, such as when it
+    /// crashed and a new instance took over its socket. Every window and surface belongs to the
+    /// lost connection, so the application destroys them in `destroy_surfaces` and creates them
+    /// again in `can_create_surfaces`.
+    fn reconnect_after_loss<A: ApplicationHandler>(&mut self, app: &mut A) -> bool {
+        if !self.reconnect || self.handle.connection.protocol_error().is_some() {
+            return false;
+        }
+
+        app.destroy_surfaces(&self.active_event_loop);
+        let wayland = match connect_again()
+            .and_then(|connection| WaylandConnection::new(connection, self.event_loop.handle()))
+        {
+            Ok(wayland) => wayland,
+            Err(error) => {
+                tracing::error!("Could not connect to the compositor again: {error}");
+                return false;
+            },
+        };
+
+        self.event_loop.handle().remove(mem::replace(&mut self.wayland_token, wayland.token));
+        self.pump_event_notifier = None;
+        self.wayland_dispatcher = wayland.dispatcher.clone();
+        self.handle = wayland.handle.clone();
+        self.active_event_loop.wayland_dispatcher = wayland.dispatcher;
+        self.active_event_loop.handle = wayland.handle;
+        self.active_event_loop.queue_handle = wayland.queue_handle;
+        drop(mem::replace(self.active_event_loop.state.get_mut(), wayland.state));
+
+        app.can_create_surfaces(&self.active_event_loop);
+        true
     }
 
     /// Recursive closing all windows from the child to the parent
@@ -629,6 +648,75 @@ impl EventLoop {
 
     fn exit_code(&self) -> Option<i32> {
         self.active_event_loop.exit_code()
+    }
+}
+
+/// A connection to the compositor with winit's state and the dispatcher reading its events.
+struct WaylandConnection {
+    handle: Arc<OwnedDisplayHandle>,
+    queue_handle: QueueHandle<WinitState>,
+    state: WinitState,
+    dispatcher: WaylandDispatcher,
+    token: RegistrationToken,
+}
+
+impl WaylandConnection {
+    fn new(
+        connection: Connection,
+        loop_handle: LoopHandle<'static, WinitState>,
+    ) -> Result<Self, OsError> {
+        let (globals, mut event_queue) =
+            globals::registry_queue_init(&connection).map_err(|err| os_error!(err))?;
+        let queue_handle = event_queue.handle();
+
+        let mut state = WinitState::new(&globals, &queue_handle, loop_handle.clone())?;
+
+        // NOTE: do a roundtrip after binding the globals to prevent potential
+        // races with the server.
+        event_queue.roundtrip(&mut state).map_err(|err| os_error!(err))?;
+
+        // Register Wayland source.
+        let wayland_source = WaylandSource::new(connection.clone(), event_queue);
+        let dispatcher =
+            calloop::Dispatcher::new(wayland_source, |_, queue, winit_state: &mut WinitState| {
+                let result = queue.dispatch_pending(winit_state);
+                if result.is_ok()
+                    && (!winit_state.events_sink.is_empty()
+                        || !winit_state.window_compositor_updates.is_empty())
+                {
+                    winit_state.dispatched_events = true;
+                }
+                result
+            });
+        let token =
+            loop_handle.register_dispatcher(dispatcher.clone()).map_err(|err| os_error!(err))?;
+
+        Ok(Self {
+            handle: Arc::new(OwnedDisplayHandle::new(connection)),
+            queue_handle,
+            state,
+            dispatcher,
+            token,
+        })
+    }
+}
+
+/// Connects to the compositor named in the environment, waiting for one that has to create its
+/// socket again.
+fn connect_again() -> Result<Connection, OsError> {
+    const ATTEMPTS: u32 = 100;
+    const PAUSE: Duration = Duration::from_millis(100);
+    let mut attempt = 0;
+    loop {
+        match Connection::connect_to_env() {
+            Ok(connection) => return Ok(connection),
+            Err(error) if attempt < ATTEMPTS => {
+                tracing::debug!("Waiting for the compositor: {error}");
+                attempt += 1;
+                std::thread::sleep(PAUSE);
+            },
+            Err(error) => return Err(os_error!(error)),
+        }
     }
 }
 

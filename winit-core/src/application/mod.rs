@@ -98,6 +98,12 @@ pub trait ApplicationHandler {
     /// [`VkSurfaceKHR`]: https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkSurfaceKHR.html
     /// [`wgpu::Surface`]: https://docs.rs/wgpu/latest/wgpu/struct.Surface.html
     ///
+    /// ### Wayland
+    ///
+    /// With `EventLoopBuilderExtWayland::with_reconnect`, [`can_create_surfaces()`] is called again
+    /// once the event loop connected to the compositor again after losing the connection to it.
+    /// Windows from before are gone; create them anew.
+    ///
     /// [`can_create_surfaces()`]: Self::can_create_surfaces()
     /// [`destroy_surfaces()`]: Self::destroy_surfaces()
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop);
@@ -298,9 +304,17 @@ pub trait ApplicationHandler {
     /// [`VkSurfaceKHR`]: https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VkSurfaceKHR.html
     /// [`wgpu::Surface`]: https://docs.rs/wgpu/latest/wgpu/struct.Surface.html
     ///
+    /// ### Wayland
+    ///
+    /// With `EventLoopBuilderExtWayland::with_reconnect`, [`destroy_surfaces()`] is called when
+    /// the connection to the compositor was lost, such as when it crashed, before the event loop
+    /// connects again. Every window and render surface belongs to the lost connection: drop them,
+    /// and everything else made from their display or surface handles, before the event callback
+    /// completes.
+    ///
     /// ### Others
     ///
-    /// - **iOS / macOS / Orbital / Wayland / Web / Windows / X11:** Unsupported.
+    /// - **iOS / macOS / Orbital / Web / Windows / X11:** Unsupported.
     ///
     /// [`can_create_surfaces()`]: Self::can_create_surfaces()
     /// [`destroy_surfaces()`]: Self::destroy_surfaces()

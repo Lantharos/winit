@@ -82,6 +82,18 @@ pub trait EventLoopBuilderExtWayland {
     /// By default, the window is only allowed to be created on the main
     /// thread, to make platform compatibility easier.
     fn with_any_thread(&mut self, any_thread: bool) -> &mut Self;
+
+    /// Whether to connect to the compositor again when the connection to it is lost, such as
+    /// when it crashed and a new instance took over its socket.
+    ///
+    /// Every window and surface belongs to the lost connection. The application receives
+    /// [`destroy_surfaces`], where it drops its windows and everything it made for them, and
+    /// [`can_create_surfaces`] once connected again, where it creates them anew. Without this,
+    /// or when the compositor doesn't come back, the event loop exits with an error.
+    ///
+    /// [`destroy_surfaces`]: winit_core::application::ApplicationHandler::destroy_surfaces
+    /// [`can_create_surfaces`]: winit_core::application::ApplicationHandler::can_create_surfaces
+    fn with_reconnect(&mut self, reconnect: bool) -> &mut Self;
 }
 
 /// Additional methods on [`Window`] that are specific to Wayland.

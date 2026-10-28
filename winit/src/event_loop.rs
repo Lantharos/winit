@@ -383,6 +383,12 @@ impl winit_wayland::EventLoopBuilderExtWayland for EventLoopBuilder {
         self.platform_specific.any_thread = any_thread;
         self
     }
+
+    #[inline]
+    fn with_reconnect(&mut self, reconnect: bool) -> &mut Self {
+        self.platform_specific.reconnect = reconnect;
+        self
+    }
 }
 
 #[cfg(web_platform)]
