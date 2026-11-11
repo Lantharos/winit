@@ -82,7 +82,7 @@ impl Window {
         let window =
             state.xdg_shell.create_window(surface.clone(), default_decorations, &queue_handle);
 
-        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, .. } =
+        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, tag } =
             *attributes
                 .platform
                 .take()
@@ -166,6 +166,10 @@ impl Window {
         // Activate the window when the token is passed.
         if let (Some(xdg_activation), Some(token)) = (xdg_activation.as_ref(), activation_token) {
             xdg_activation.activate(token.into_raw(), &surface);
+        }
+
+        if let (Some(tags), Some(tag)) = (state.xdg_toplevel_tag.as_ref(), tag) {
+            tags.tag(window.xdg_toplevel(), tag);
         }
 
         // XXX Do initial commit.

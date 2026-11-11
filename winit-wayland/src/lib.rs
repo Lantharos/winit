@@ -141,6 +141,7 @@ pub struct WindowAttributesWayland {
     pub(crate) name: Option<ApplicationName>,
     pub(crate) activation_token: Option<ActivationToken>,
     pub(crate) prefer_csd: bool,
+    pub(crate) tag: Option<String>,
 }
 
 impl WindowAttributesWayland {
@@ -177,6 +178,18 @@ impl WindowAttributesWayland {
     #[inline]
     pub fn with_prefer_csd(mut self, prefer_csd: bool) -> Self {
         self.prefer_csd = prefer_csd;
+        self
+    }
+
+    /// Tags the window through `xdg_toplevel_tag_v1`, where the compositor has it, before the
+    /// window first reaches the compositor.
+    ///
+    /// The tag tells the window apart from the app's other windows and stays the same for the
+    /// same window across launches, so the compositor can recognize a window it saw before, for
+    /// example to put it back where it was.
+    #[inline]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
         self
     }
 }

@@ -38,6 +38,7 @@ use crate::types::wp_tablet_input_v2::TabletManager;
 use crate::types::wp_viewporter::ViewporterState;
 use crate::types::xdg_activation::XdgActivationState;
 use crate::types::xdg_toplevel_icon_manager::XdgToplevelIconManagerState;
+use crate::types::xdg_toplevel_tag::XdgToplevelTagState;
 use crate::window::WindowState;
 use crate::window::handles::WindowRequests;
 
@@ -98,6 +99,9 @@ pub struct WinitState {
 
     /// Xdg toplevel icon manager
     pub xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerState>,
+
+    /// Xdg toplevel tag manager
+    pub xdg_toplevel_tag: Option<XdgToplevelTagState>,
 
     /// The pool where images are allocated (used for window icons and custom cursors)
     pub image_pool: Arc<Mutex<SlotPool>>,
@@ -204,6 +208,7 @@ impl WinitState {
             xdg_activation: XdgActivationState::bind(globals, queue_handle).ok(),
             xdg_toplevel_icon_manager: XdgToplevelIconManagerState::bind(globals, queue_handle)
                 .ok(),
+            xdg_toplevel_tag: XdgToplevelTagState::bind(globals, queue_handle).ok(),
 
             image_pool,
 
