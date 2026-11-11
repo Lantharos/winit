@@ -239,7 +239,7 @@ impl Window {
         let parent_state = parent.as_ref().map(|parent| parent.state.clone());
 
         let size: Size = attributes.surface_size.unwrap_or(LogicalSize::new(800., 600.).into());
-        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, .. } =
+        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, tag } =
             *attributes
                 .platform
                 .take()
@@ -291,6 +291,10 @@ impl Window {
         // Set the app_id.
         if let Some(name) = app_name.map(|name| name.general) {
             xdg_toplevel.set_app_id(name);
+        }
+
+        if let (Some(tags), Some(tag)) = (state.xdg_toplevel_tag.as_ref(), tag) {
+            tags.tag(xdg_toplevel, tag);
         }
 
         // Set startup mode.
