@@ -2,11 +2,12 @@
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::io::{self, BufRead, Cursor, ErrorKind, Write};
+use std::fs::File;
+use std::io::{self, BufRead, Cursor, Write};
 use std::ops::{BitOr, Deref};
-use std::sync::Arc;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use calloop::PostAction;
 use dpi::{LogicalPosition, PhysicalPosition};
 use sctk::data_device_manager::WritePipe;
 use sctk::data_device_manager::data_device::{DataDeviceData, DataDeviceHandler};
@@ -44,6 +45,34 @@ where
     out
 }
 
+/// Hands the drag's data in `mime` to the receiver, on a thread of its own so that data which
+/// takes long to make never holds up the event loop.
+fn send_drag_data(data: &Mutex<Box<dyn DataTransferSend>>, mime: MimeType, fd: WritePipe) {
+    let Some(send_data) = data.lock().unwrap().data_for_type(&mime) else {
+        return;
+    };
+
+    let bytes = match send_data {
+        SendData::Uris(strings) => encode_uri_list(strings),
+        SendData::String(str) => match mime.parse_charset() {
+            Ok(Charset::Utf8) => str.into_bytes(),
+            Err(e) => {
+                tracing::error!("{e}");
+                return;
+            },
+        },
+        SendData::Bytes(binary) => binary,
+        _ => return,
+    };
+
+    let file = File::from(OwnedFd::from(fd));
+    unsafe {
+        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+        libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK);
+    }
+    let _ = (&file).write_all(&bytes);
+}
+
 impl DataSourceHandler for WinitState {
     fn accept_mime(
         &mut self,
@@ -64,54 +93,12 @@ impl DataSourceHandler for WinitState {
         mime: String,
         fd: WritePipe,
     ) {
-        let Some(data) = self.dnd_state.send_drag_data_mut() else {
+        let Some(data) = self.dnd_state.send_drag_data() else {
             // TODO: Is there a way to explicitly express that the data was not sent?
             return;
         };
 
-        let mime = MimeType::parse(mime);
-
-        let Some(send_data) = data.data_for_type(&mime) else {
-            return;
-        };
-
-        let mut encoder = match send_data {
-            SendData::Uris(strings) => Cursor::new(encode_uri_list(strings)),
-            SendData::String(str) => match mime.parse_charset() {
-                Ok(Charset::Utf8) => Cursor::new(str.into_bytes()),
-                Err(e) => {
-                    tracing::error!("{e}");
-                    return;
-                },
-            },
-            SendData::Bytes(binary) => Cursor::new(binary),
-            _ => return,
-        };
-
-        let _ = self.loop_handle.insert_source(fd, move |_, file, _| {
-            // Safety: We only mutate `file` in-place and do not replace and drop it.
-            let file = unsafe { file.get_mut() };
-            loop {
-                let Ok(encoded_bytes) = encoder.fill_buf() else {
-                    return PostAction::Remove;
-                };
-
-                match file.write(encoded_bytes) {
-                    Ok(0) => {
-                        break PostAction::Remove;
-                    },
-                    Ok(consumed) => {
-                        encoder.consume(consumed);
-                    },
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                        break PostAction::Continue;
-                    },
-                    Err(_) => {
-                        break PostAction::Remove;
-                    },
-                }
-            }
-        });
+        std::thread::spawn(move || send_drag_data(&data, MimeType::parse(mime), fd));
     }
 
     fn cancelled(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {
@@ -293,6 +280,11 @@ impl MimeType {
         let charset = charset.split_once(',').map(|(first, _)| first).unwrap_or(charset).trim();
 
         if charset == "utf-8" { Ok(Charset::Utf8) } else { Err(UnexpectedCharsetError(charset)) }
+    }
+
+    /// The MIME type called `mime`, for types that have no [`TypeHint`].
+    pub fn new(mime: impl Into<String>) -> Self {
+        Self::parse(mime.into())
     }
 
     fn parse(mime: String) -> Self {
@@ -525,8 +517,8 @@ pub struct DragSource {
     /// This is stored internally, as if this source is dropped then the
     /// drag operation will be cancelled.
     _data_source: SctkDragSource,
-    /// The supplied [`DataTransferSend`].
-    pub(crate) data: Box<dyn DataTransferSend>,
+    /// The supplied [`DataTransferSend`], which receivers' requests reach from other threads.
+    pub(crate) data: Arc<Mutex<Box<dyn DataTransferSend>>>,
     pub(crate) selected_action: WlDndAction,
     pub(crate) window_id: WindowId,
     /// (Optionally) an icon for the drag-and-drop operation.
@@ -544,7 +536,7 @@ impl DragSource {
         Self {
             data_transfer_id,
             _data_source: data_source,
-            data,
+            data: Arc::new(Mutex::new(data)),
             selected_action: WlDndAction::None,
             window_id,
             _icon: icon,
@@ -552,8 +544,8 @@ impl DragSource {
     }
 
     /// Per-type data to be sent. See [`DataTransferSend`].
-    pub fn data(&mut self) -> &mut dyn DataTransferSend {
-        &mut *self.data
+    pub fn data(&self) -> MutexGuard<'_, Box<dyn DataTransferSend>> {
+        self.data.lock().unwrap()
     }
 }
 
@@ -589,8 +581,8 @@ impl DndState {
         self.send_drag.take().is_some()
     }
 
-    pub(crate) fn send_drag_data_mut(&mut self) -> Option<&mut dyn DataTransferSend> {
-        self.send_drag.as_mut().map(|send| send.data())
+    pub(crate) fn send_drag_data(&self) -> Option<Arc<Mutex<Box<dyn DataTransferSend>>>> {
+        self.send_drag.as_ref().map(|send| Arc::clone(&send.data))
     }
 }
 
