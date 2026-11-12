@@ -48,6 +48,8 @@ changelog entry.
 
 - On Wayland, add `EventLoopBuilderExtWayland::with_reconnect`, which connects to the compositor again after losing the connection, such as when it crashed and a new instance took over its socket. Applications drop their windows in `destroy_surfaces` and create them again in `can_create_surfaces`.
 - On Wayland, add `WindowAttributesWayland::with_tag`, which tags a window through `xdg_toplevel_tag_v1` before it first reaches the compositor, so the compositor can recognize the same window across launches.
+- On Wayland, add `MimeType::new`, so a drag can carry types that have no `TypeHint`.
+- On Wayland, make a drag's data on a thread of its own when a receiver asks for it, so data that takes long to make never holds up the event loop.
 
 ### Changed
 

@@ -4,8 +4,9 @@ use std::collections::hash_map::Entry;
 use std::ffi::OsStr;
 use std::io::{self, BufRead, Cursor, ErrorKind, Write};
 use std::ops::{BitOr, Deref};
-use std::os::fd::OwnedFd;
-use std::sync::Arc;
+use std::fs::File;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::sync::{Arc, Mutex};
 use std::{fmt, mem};
 
 use calloop::PostAction;
@@ -170,6 +171,11 @@ impl MimeType {
     }
 
     // TODO: We should properly parse MIME types using `mime` or a similar crate.
+    /// The MIME type called `mime`, for types that have no [`TypeHint`].
+    pub fn new(mime: impl Into<String>) -> Self {
+        Self::parse(mime.into())
+    }
+
     fn parse_charset(&self) -> Result<Charset, UnexpectedCharsetError<'_>> {
         let Some((_, charset)) = self
             .mime
@@ -475,13 +481,14 @@ impl DataTransferState {
         }
     }
 
-    fn send_data_mut(&mut self, source: &WlDataSource) -> Option<&mut dyn DataTransferSend> {
-        if let Some(drag) =
-            self.send_drag.as_mut().filter(|drag| drag.data_source.inner() == source)
-        {
-            return Some(drag.data.as_mut());
-        }
+    fn drag_data(&self, source: &WlDataSource) -> Option<Arc<Mutex<Box<dyn DataTransferSend>>>> {
+        self.send_drag
+            .as_ref()
+            .filter(|drag| drag.data_source.inner() == source)
+            .map(|drag| Arc::clone(&drag.data))
+    }
 
+    fn clipboard_data_mut(&mut self, source: &WlDataSource) -> Option<&mut dyn DataTransferSend> {
         self.send_clipboard
             .as_mut()
             .filter(|clipboard| clipboard.data_source.inner() == source)
@@ -626,6 +633,34 @@ impl WinitState {
     }
 }
 
+/// Hands the drag's data in `mime` to the receiver, on a thread of its own so that data which
+/// takes long to make never holds up the event loop.
+fn send_drag_data(data: &Mutex<Box<dyn DataTransferSend>>, mime: MimeType, fd: WritePipe) {
+    let Some(send_data) = data.lock().unwrap().data_for_type(&mime) else {
+        return;
+    };
+
+    let bytes = match send_data {
+        SendData::Uris(strings) => encode_uri_list(strings),
+        SendData::String(str) => match mime.parse_charset() {
+            Ok(Charset::Utf8) => str.into_bytes(),
+            Err(e) => {
+                tracing::error!("{e}");
+                return;
+            },
+        },
+        SendData::Bytes(binary) => binary,
+        _ => return,
+    };
+
+    let file = File::from(OwnedFd::from(fd));
+    unsafe {
+        let flags = libc::fcntl(file.as_raw_fd(), libc::F_GETFL);
+        libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags & !libc::O_NONBLOCK);
+    }
+    let _ = (&file).write_all(&bytes);
+}
+
 impl DataSourceHandler for WinitState {
     fn accept_mime(
         &mut self,
@@ -646,12 +681,16 @@ impl DataSourceHandler for WinitState {
         mime: String,
         fd: WritePipe,
     ) {
-        let Some(data) = self.data_transfer_state.send_data_mut(source) else {
+        let mime = MimeType::parse(mime);
+        if let Some(data) = self.data_transfer_state.drag_data(source) {
+            std::thread::spawn(move || send_drag_data(&data, mime, fd));
+            return;
+        }
+
+        let Some(data) = self.data_transfer_state.clipboard_data_mut(source) else {
             // TODO: Is there a way to explicitly express that the data was not sent?
             return;
         };
-
-        let mime = MimeType::parse(mime);
 
         let Some(send_data) = data.data_for_type(&mime) else {
             return;
@@ -980,7 +1019,7 @@ impl DragSession {
 pub struct DragSource {
     data_transfer_id: DataTransferId,
     data_source: SctkDragSource,
-    data: Box<dyn DataTransferSend>,
+    data: Arc<Mutex<Box<dyn DataTransferSend>>>,
     selected_action: WlDndAction,
     window_id: WindowId,
     _icon: Option<Surface>,
@@ -997,7 +1036,7 @@ impl DragSource {
         Self {
             data_transfer_id,
             data_source,
-            data,
+            data: Arc::new(Mutex::new(data)),
             selected_action: WlDndAction::None,
             window_id,
             _icon: icon,
