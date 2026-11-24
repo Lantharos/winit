@@ -18,6 +18,7 @@ use sctk::registry::{ProvidesRegistryState, RegistryState};
 use sctk::seat::SeatState;
 use sctk::seat::pointer::ThemedPointer;
 use sctk::shell::WaylandSurface;
+use sctk::shell::wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure};
 use sctk::shell::xdg::XdgShell;
 use sctk::shell::xdg::popup::{Popup as XdgPopup, PopupConfigure, PopupHandler};
 use sctk::shell::xdg::window::{Window, WindowConfigure, WindowHandler};
@@ -67,6 +68,9 @@ pub struct WinitState {
 
     /// The XDG shell that is used for windows.
     pub xdg_shell: XdgShell,
+
+    /// The layer shell overlays are made with, bound once the first overlay is made.
+    pub layer_shell: Option<LayerShell>,
 
     /// The currently present windows.
     pub windows: RefCell<HashMap<WindowId, Arc<Mutex<WindowState>>>>,
@@ -217,6 +221,7 @@ impl WinitState {
             shm,
 
             xdg_shell: XdgShell::bind(globals, queue_handle).map_err(|err| os_error!(err))?,
+            layer_shell: None,
             xdg_activation: XdgActivationState::bind(globals, queue_handle).ok(),
             xdg_toplevel_icon_manager: XdgToplevelIconManagerState::bind(globals, queue_handle)
                 .ok(),
@@ -508,6 +513,52 @@ impl PopupHandler for WinitState {
             window_requests.closed.store(true, Ordering::Relaxed);
         }
         Self::queue_close(&mut self.window_compositor_updates, window_id);
+    }
+}
+
+impl LayerShellHandler for WinitState {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        let window_id = super::make_wid(layer.wl_surface());
+        if !self.windows.get_mut().contains_key(&window_id) {
+            tracing::debug!("got close for dead overlay {window_id:?}, ignoring it");
+            return;
+        }
+        if let Some(window_requests) = self.window_requests.get_mut().get(&window_id) {
+            window_requests.closed.store(true, Ordering::Relaxed);
+        }
+        Self::queue_close(&mut self.window_compositor_updates, window_id);
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        let window_id = super::make_wid(layer.wl_surface());
+        let Some(window) = self.windows.get_mut().get_mut(&window_id) else {
+            tracing::debug!("got configure for dead overlay {window_id:?}, ignoring it");
+            return;
+        };
+        let index = if let Some(index) =
+            self.window_compositor_updates.iter().position(|update| update.window_id == window_id)
+        {
+            index
+        } else {
+            self.window_compositor_updates.push(WindowCompositorUpdate::new(window_id));
+            self.window_compositor_updates.len() - 1
+        };
+        self.window_compositor_updates[index].resized |=
+            window.lock().unwrap().configure_overlay(configure);
+        self.window_requests
+            .get_mut()
+            .get(&window_id)
+            .unwrap()
+            .redraw_requested
+            .store(true, Ordering::Relaxed);
+        self.dispatched_events = true;
     }
 }
 

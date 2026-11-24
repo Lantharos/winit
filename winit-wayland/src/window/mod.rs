@@ -239,7 +239,7 @@ impl Window {
         let parent_state = parent.as_ref().map(|parent| parent.state.clone());
 
         let size: Size = attributes.surface_size.unwrap_or(LogicalSize::new(800., 600.).into());
-        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, tag } =
+        let WindowAttributesWayland { name: app_name, activation_token, prefer_csd, tag, .. } =
             *attributes
                 .platform
                 .take()

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use dpi::LogicalSize;
 use sctk::reexports::csd_frame::{DecorationsFrame, WindowState as XdgWindowState};
+use sctk::shell::wlr_layer::LayerSurfaceConfigure;
 use sctk::shell::xdg::popup::{ConfigureKind, PopupConfigure};
 use sctk::shell::xdg::window::{DecorationMode, WindowConfigure};
 use sctk::shm::Shm;
@@ -13,6 +14,30 @@ use super::create_sctk_adwaita_config;
 use super::{WindowState, WindowType, WinitFrame};
 
 impl WindowState {
+    pub fn configure_overlay(&mut self, configure: LayerSurfaceConfigure) -> bool {
+        if let Some(initial_size) = self.initial_size.take() {
+            self.size = initial_size.to_logical(self.scale_factor());
+        }
+
+        let (width, height) = configure.new_size;
+        let new_size = LogicalSize {
+            width: if width == 0 { self.size.width } else { width },
+            height: if height == 0 { self.size.height } else { height },
+        };
+        let WindowType::Overlay { last_configure, .. } = &mut self.window else {
+            tracing::error!("configure_overlay called for a window that is not an overlay");
+            return false;
+        };
+        let initial = last_configure.is_none();
+        *last_configure = Some(configure);
+        if initial || new_size != self.size {
+            self.resize(new_size);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn configure_popup(&mut self, configure: PopupConfigure) -> bool {
         // NOTE: when using fractional scaling or wl_compositor@v6 the scaling
         // should be delivered before the first configure, thus apply it to
@@ -192,10 +217,10 @@ impl WindowState {
         let new_state = configure.state;
         let last_configure = match &mut self.window {
             WindowType::Window { last_configure, .. } => last_configure,
-            WindowType::Popup { .. } => {
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => {
                 tracing::error!(
-                    "configure_xdg_toplevel called for a `Popup`. This should never happen, \
-                     because popups are configured through `configure_popup`"
+                    "configure_xdg_toplevel called for a popup or an overlay, which are \
+                     configured through their own configure"
                 );
                 return false;
             },

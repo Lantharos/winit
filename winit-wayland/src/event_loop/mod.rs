@@ -820,6 +820,14 @@ impl RootActiveEventLoop for ActiveEventLoop {
         &self,
         window_attributes: winit_core::window::WindowAttributes,
     ) -> Result<Box<dyn winit_core::window::Window>, CreateWindowError> {
+        let overlay = window_attributes
+            .platform
+            .as_ref()
+            .and_then(|platform| platform.cast_ref::<crate::WindowAttributesWayland>())
+            .and_then(|wayland| wayland.overlay);
+        if let Some(placement) = overlay {
+            return Ok(Box::new(crate::Overlay::new(self, window_attributes, placement)?));
+        }
         match window_attributes.window_type() {
             WindowType::Window => {
                 let window = crate::Window::new(self, window_attributes)?;

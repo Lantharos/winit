@@ -32,7 +32,7 @@ use winit_core::data_transfer::DataTransferId;
 use winit_core::error::{NotSupportedError, RequestError};
 use winit_core::event_loop::ActiveEventLoop as CoreActiveEventLoop;
 use winit_core::window::{
-    ActivationToken, PlatformWindowAttributes, Window as CoreWindow, WindowId,
+    ActivationToken, PlatformWindowAttributes, Window as CoreWindow, WindowAnchor, WindowId,
 };
 
 macro_rules! os_error {
@@ -42,6 +42,7 @@ macro_rules! os_error {
 mod data_transfer;
 mod event_loop;
 mod output;
+mod overlay;
 mod popup;
 mod seat;
 mod state;
@@ -50,6 +51,7 @@ mod window;
 
 pub use self::data_transfer::{DataOffer, DragSource, MimeData, MimeType};
 pub use self::event_loop::{ActiveEventLoop, EventLoop};
+pub use self::overlay::Overlay;
 pub use self::popup::Popup;
 pub use self::window::Window;
 
@@ -142,6 +144,18 @@ pub struct WindowAttributesWayland {
     pub(crate) activation_token: Option<ActivationToken>,
     pub(crate) prefer_csd: bool,
     pub(crate) tag: Option<String>,
+    pub(crate) overlay: Option<OverlayPlacement>,
+}
+
+/// Where an overlay window sits on its output, set with
+/// [`WindowAttributesWayland::with_overlay`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverlayPlacement {
+    /// The edge or corner of the output the overlay keeps to; [`WindowAnchor::Center`] centers
+    /// it.
+    pub anchor: WindowAnchor,
+    /// The distance from the edges it keeps to, in logical pixels.
+    pub margin: u32,
 }
 
 impl WindowAttributesWayland {
@@ -190,6 +204,19 @@ impl WindowAttributesWayland {
     #[inline]
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         self.tag = Some(tag.into());
+        self
+    }
+
+    /// Shows the window on the overlay layer of `wlr-layer-shell` instead of as an
+    /// `xdg_toplevel`: above every other window, full-screen ones included, never taking
+    /// keyboard focus, and with an empty input region, so the pointer reaches what is below.
+    ///
+    /// The window keeps the size it is created with and sits at `placement` on the compositor's
+    /// chosen output. Creating it fails when the compositor offers no `zwlr_layer_shell_v1`,
+    /// which some compositors offer only to clients they trust.
+    #[inline]
+    pub fn with_overlay(mut self, placement: OverlayPlacement) -> Self {
+        self.overlay = Some(placement);
         self
     }
 }

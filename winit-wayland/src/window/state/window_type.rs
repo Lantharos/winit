@@ -1,5 +1,6 @@
 use dpi::LogicalPosition;
 use sctk::shell::WaylandSurface;
+use sctk::shell::wlr_layer::{LayerSurface, LayerSurfaceConfigure};
 use sctk::shell::xdg::popup::{Popup, PopupConfigure};
 use sctk::shell::xdg::window::{Window, WindowConfigure};
 use sctk::shell::xdg::{XdgPositioner, XdgSurface};
@@ -21,6 +22,11 @@ pub enum WindowType {
 
         positioner: WindowPositioner,
     },
+    /// A surface on the overlay layer of `wlr-layer-shell`.
+    Overlay {
+        layer: LayerSurface,
+        last_configure: Option<LayerSurfaceConfigure>,
+    },
 }
 
 impl WindowType {
@@ -28,13 +34,24 @@ impl WindowType {
         match self {
             Self::Window { last_configure, .. } => last_configure.is_some(),
             Self::Popup { last_configure, .. } => last_configure.is_some(),
+            Self::Overlay { last_configure, .. } => last_configure.is_some(),
         }
     }
 
     pub fn xdg_toplevel(&self) -> Option<&xdg_toplevel::XdgToplevel> {
         match self {
             WindowType::Window { window, .. } => Some(window.xdg_toplevel()),
-            WindowType::Popup { .. } => None,
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => None,
+        }
+    }
+
+    pub fn xdg_surface(
+        &self,
+    ) -> Option<&wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface> {
+        match self {
+            Self::Window { window, .. } => Some(window.xdg_surface()),
+            Self::Popup { popup, .. } => Some(popup.xdg_surface()),
+            Self::Overlay { .. } => None,
         }
     }
 }
@@ -44,15 +61,7 @@ impl WaylandSurface for WindowType {
         match self {
             Self::Window { window, .. } => window.wl_surface(),
             Self::Popup { popup, .. } => popup.wl_surface(),
-        }
-    }
-}
-
-impl XdgSurface for WindowType {
-    fn xdg_surface(&self) -> &wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface {
-        match self {
-            Self::Window { window, .. } => window.xdg_surface(),
-            Self::Popup { popup, .. } => popup.xdg_surface(),
+            Self::Overlay { layer, .. } => layer.wl_surface(),
         }
     }
 }

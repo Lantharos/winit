@@ -18,7 +18,6 @@ use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 use sctk::seat::pointer::{PointerData, ThemedPointer};
 use sctk::shell::WaylandSurface;
-use sctk::shell::xdg::XdgSurface;
 use sctk::shell::xdg::window::WindowConfigure;
 use sctk::shm::slot::SlotPool;
 use tracing::{info, warn};
@@ -355,9 +354,9 @@ impl WindowState {
     pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), RequestError> {
         let xdg_toplevel = match &self.window {
             WindowType::Window { window, .. } => window.xdg_toplevel(),
-            WindowType::Popup { .. } => {
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => {
                 return Err(RequestError::NotSupported(NotSupportedError::new(
-                    "drag_resize_window is not supported for WindowType::Popup",
+                    "drag_resize_window is not supported for popups and overlays",
                 )));
             },
         };
@@ -380,9 +379,9 @@ impl WindowState {
     pub fn drag_window(&self) -> Result<(), RequestError> {
         let xdg_toplevel = match &self.window {
             WindowType::Window { window, .. } => window.xdg_toplevel(),
-            WindowType::Popup { .. } => {
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => {
                 return Err(RequestError::NotSupported(NotSupportedError::new(
-                    "drag_window is not supported for WindowType::Popup",
+                    "drag_window is not supported for popups and overlays",
                 )));
             },
         };
@@ -490,6 +489,11 @@ impl WindowState {
                     popup.reposition(xdg_positioner, 0);
                 }
             },
+            WindowType::Overlay { layer, .. } => {
+                let size: LogicalSize<u32> = surface_size.to_logical(self.scale_factor());
+                layer.set_size(size.width, size.height);
+                layer.commit();
+            },
         }
 
         self.surface_size_physical()
@@ -525,12 +529,14 @@ impl WindowState {
         self.reload_transparency_hint();
 
         // Set the window geometry.
-        self.window.xdg_surface().set_window_geometry(
-            x,
-            y,
-            outer_size.width as i32,
-            outer_size.height as i32,
-        );
+        if let Some(xdg_surface) = self.window.xdg_surface() {
+            xdg_surface.set_window_geometry(
+                x,
+                y,
+                outer_size.width as i32,
+                outer_size.height as i32,
+            );
+        }
 
         // Update the target viewport, this is used if and only if fractional scaling is in use.
         if let Some(viewport) = self.viewport.as_ref() {
@@ -601,7 +607,7 @@ impl WindowState {
     pub(crate) fn is_maximized(&self) -> bool {
         let last_configure = match &self.window {
             WindowType::Window { last_configure, .. } => last_configure,
-            WindowType::Popup { .. } => return false,
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => return false,
         };
         last_configure
             .as_ref()
@@ -612,7 +618,7 @@ impl WindowState {
     pub(crate) fn is_tiled(&self) -> bool {
         let last_configure = match &self.window {
             WindowType::Window { last_configure, .. } => last_configure,
-            WindowType::Popup { .. } => return false,
+            WindowType::Popup { .. } | WindowType::Overlay { .. } => return false,
         };
         last_configure.as_ref().is_some_and(|last_configure| last_configure.is_tiled())
     }

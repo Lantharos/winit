@@ -6,8 +6,8 @@ use dpi::{
     LogicalPosition, LogicalSize, PhysicalInsets, PhysicalPosition, PhysicalSize, Position, Size,
 };
 use sctk::shell::WaylandSurface;
+use sctk::shell::xdg::XdgPositioner;
 use sctk::shell::xdg::popup::Popup as SctkPopup;
-use sctk::shell::xdg::{XdgPositioner, XdgSurface};
 use wayland_client::Proxy;
 use winit_core::cursor::Cursor;
 use winit_core::error::{CreateWindowError, InvalidInput, NotSupportedError, RequestError};
@@ -113,7 +113,10 @@ impl Popup {
         xdg_positioner.set_offset(offset.x, offset.y);
         xdg_positioner.set_size(size.width, size.height);
 
-        let parent_surface = parent_window_state.window.xdg_surface();
+        let parent_surface = parent_window_state
+            .window
+            .xdg_surface()
+            .ok_or(InvalidInput::new("An overlay can't be the parent of a popup"))?;
         let surface = state.compositor_state.create_surface(&queue_handle);
         let popup = SctkPopup::from_surface(
             Some(parent_surface),
